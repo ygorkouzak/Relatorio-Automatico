@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import tempfile
 import base64
 import requests
 from flask import Flask, request
@@ -10,6 +12,15 @@ from datetime import datetime
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Suporte a credenciais via variável de ambiente (para deploy no Render)
+_creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+if _creds_json and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    _tmp.write(_creds_json)
+    _tmp.flush()
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _tmp.name
+
 client = bigquery.Client(project="gcp-maas-proj-manutencao")
 
 # =========================================================
@@ -131,8 +142,10 @@ def relatorio():
     cliente_id_original = request.args.get('cliente', request.args.get('CLIENTE', '')).strip()
     cliente_id_norm = normalizar_id(cliente_id_original) if cliente_id_original else ""
 
-    condicao = f"WHERE T9_CLIENTE = '{cliente_id_original}'" if cliente_id_original else ""
+    logos, msg_planilha, amostra_chaves = carregar_logos()
+    logo_fixa_src = carregar_logo_fixa_base64()
 
+    condicao = f"WHERE T9_CLIENTE = '{cliente_id_original}'" if cliente_id_original else ""
     query = f"""
         SELECT T9_CODBEM AS `PREFIXO`, T9_NOME, T9_STATUS, T9_PLACA, T9_CLIENTE, T9_POSCONT, T9_ANOMOD, T9_ANOFAB, T9_CHASSI, T9_XCONTRA, T9_XLOTE
         FROM `gcp-maas-proj-manutencao.silver.MAAS_ST9`
@@ -141,22 +154,12 @@ def relatorio():
     """
     resultados = list(client.query(query).result())
 
-    logos, msg_planilha, amostra_chaves = carregar_logos()
-    
-    if not cliente_id_norm and logos:
-        cliente_id_norm = list(logos.keys())[0]
-        cliente_id_original = cliente_id_norm
-        query_default = query.replace("WHERE T9_CLIENTE = ''", f"WHERE T9_CLIENTE = '{cliente_id_original}'")
-        resultados = list(client.query(query_default).result())
-
     info_cliente = logos.get(cliente_id_norm, {
-        "nome": "CLIENTE NÃO CADASTRADO NO EXCEL",
+        "nome": "Todos os Clientes",
         "logo": ""
     })
-    
-    logo_fixa_src = carregar_logo_fixa_base64()
 
-    logo_cliente_src = info_cliente.get('logo', '')
+    logo_cliente_src = logo_fixa_src if not cliente_id_original else info_cliente.get('logo', '')
     status_download_cliente = "Não foi tentado (Sem Link)"
     
     if logo_cliente_src and str(logo_cliente_src).startswith('http'):
@@ -273,7 +276,7 @@ def relatorio():
             
             /* --- TABELAS --- */
             table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; margin-left: 10px; width: calc(100% - 10px); }}
-            th, td {{ border: 1px solid #dee2e6; padding: 7px; text-align: left; }}
+            th, td {{ border: 1px solid #dee2e6; padding: 7px; text-align: center; }}
             th {{ background-color: #e9ecef; color: #333; font-weight: bold; text-transform: uppercase; }}
             tr:nth-child(even) {{ background-color: #f8f9fa; }}
             
@@ -320,7 +323,7 @@ def relatorio():
                     {opcoes_dropdown}
                 </select>
             </div>
-            <button onclick="window.print()">🖨️ Imprimir Relatório</button>
+<button onclick="window.print()">🖨️ Imprimir Relatório</button>
         </div>
 
         <div class="folha-a4">
@@ -435,11 +438,29 @@ def relatorio():
                 html += f"<h4 class='titulo-status'>{status_desc} <span style='font-size: 13px; font-weight: normal; color: #555;'>({total_status} veículos)</span></h4>"
                 for modelo, veiculos in dict_modelo.items():
                     html += f"<h5 class='titulo-modelo'>Modelo: {modelo} <span style='font-weight: normal; color: #666;'>({len(veiculos)} veículos)</span></h5>"
-                    
-                    html += "<table><thead><tr><th>Lote</th><th>Prefixo</th><th>Placa</th><th>Chassi</th><th>Ano Mod.</th><th>Ano Fab.</th><th>Hodômetro</th></tr></thead><tbody>"
-                    for v in veiculos:
+
+                    veiculos = sorted(veiculos, key=lambda v: str(v.get('T9_XLOTE') or '').strip())
+
+                    html += "<table><thead><tr><th>Lote</th><th>Prefixo</th><th>Placa</th><th>Chassi</th><th>Ano Mod.</th><th>Ano Fab.</th><th style='text-align: right;'>Hodômetro</th></tr></thead><tbody>"
+                    i = 0
+                    while i < len(veiculos):
+                        v = veiculos[i]
+                        lote_atual = v.get('T9_XLOTE') or '-'
+                        rowspan = 1
+                        while i + rowspan < len(veiculos) and (veiculos[i + rowspan].get('T9_XLOTE') or '-') == lote_atual:
+                            rowspan += 1
+                        def fmt_hod(val):
+                            try:
+                                return f"{int(float(val)):,}".replace(",", ".") if val and str(val).strip() not in ['-', '', 'None', 'nan'] else '-'
+                            except (ValueError, TypeError):
+                                return val or '-'
                         cod_bem = v.get('PREFIXO') or v.get('T9_CODBEM') or '-'
-                        html += f"<tr><td>{v.get('T9_XLOTE') or '-'}</td><td>{cod_bem}</td><td>{v.get('T9_PLACA') or '-'}</td><td>{v.get('T9_CHASSI') or '-'}</td><td>{v.get('T9_ANOMOD') or '-'}</td><td>{v.get('T9_ANOFAB') or '-'}</td><td>{v.get('T9_POSCONT') or '-'}</td></tr>"
+                        html += f"<tr><td rowspan='{rowspan}' style='vertical-align: top;'>{lote_atual}</td><td>{cod_bem}</td><td>{v.get('T9_PLACA') or '-'}</td><td>{v.get('T9_CHASSI') or '-'}</td><td>{v.get('T9_ANOMOD') or '-'}</td><td>{v.get('T9_ANOFAB') or '-'}</td><td style='text-align: right;'>{fmt_hod(v.get('T9_POSCONT'))}</td></tr>"
+                        for j in range(1, rowspan):
+                            v2 = veiculos[i + j]
+                            cod_bem2 = v2.get('PREFIXO') or v2.get('T9_CODBEM') or '-'
+                            html += f"<tr><td>{cod_bem2}</td><td>{v2.get('T9_PLACA') or '-'}</td><td>{v2.get('T9_CHASSI') or '-'}</td><td>{v2.get('T9_ANOMOD') or '-'}</td><td>{v2.get('T9_ANOFAB') or '-'}</td><td style='text-align: right;'>{fmt_hod(v2.get('T9_POSCONT'))}</td></tr>"
+                        i += rowspan
                     html += "</tbody></table>"
                 html += "</div>"
             html += "</div>"
@@ -456,4 +477,4 @@ def relatorio():
     return html
 
 if __name__ == '__main__':
-    app.run(host='10.5.1.27', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
