@@ -1,11 +1,11 @@
 import os
 import re
 import json
-import tempfile
 import base64
 import requests
 from flask import Flask, request
 from google.cloud import bigquery
+from google.oauth2.credentials import Credentials
 import pandas as pd
 from datetime import datetime
 
@@ -15,13 +15,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Suporte a credenciais via variável de ambiente (para deploy no Render)
 _creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-if _creds_json and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-    _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    _tmp.write(_creds_json)
-    _tmp.flush()
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _tmp.name
-
-client = bigquery.Client(project="gcp-maas-proj-manutencao")
+if _creds_json:
+    _info = json.loads(_creds_json)
+    _credentials = Credentials(
+        token=None,
+        refresh_token=_info["refresh_token"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=_info["client_id"],
+        client_secret=_info["client_secret"],
+    )
+    client = bigquery.Client(project="gcp-maas-proj-manutencao", credentials=_credentials)
+else:
+    client = bigquery.Client(project="gcp-maas-proj-manutencao")
 
 # =========================================================
 # CONFIGURAÇÕES DA EMPRESA E STATUS
