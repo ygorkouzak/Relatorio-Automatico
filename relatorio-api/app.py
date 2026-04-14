@@ -5,7 +5,7 @@ import base64
 import requests
 from flask import Flask, request
 from google.cloud import bigquery
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 import pandas as pd
 from datetime import datetime
 
@@ -17,13 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if _creds_json:
     _info = json.loads(_creds_json)
-    _credentials = Credentials(
-        token=None,
-        refresh_token=_info["refresh_token"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=_info["client_id"],
-        client_secret=_info["client_secret"],
-    )
+    _credentials = service_account.Credentials.from_service_account_info(_info)
     client = bigquery.Client(project="gcp-maas-proj-manutencao", credentials=_credentials)
 else:
     client = bigquery.Client(project="gcp-maas-proj-manutencao")
