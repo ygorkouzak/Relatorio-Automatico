@@ -17,7 +17,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 if _creds_json:
     _info = json.loads(_creds_json)
-    _credentials = service_account.Credentials.from_service_account_info(_info)
+    _credentials = service_account.Credentials.from_service_account_info(
+        _info,
+        scopes=["https://www.googleapis.com/auth/bigquery"]
+    )
     client = bigquery.Client(project="gcp-maas-proj-manutencao", credentials=_credentials)
 else:
     client = bigquery.Client(project="gcp-maas-proj-manutencao")
@@ -212,7 +215,12 @@ def relatorio():
     if "Sem Contrato" in dados_agrupados:
         contratos_lista.append("Sem Contrato")
 
-    total_veiculos = len(veiculos_processados)
+    total_veiculos = (
+        len(veiculos_processados)
+        - contagem_status.get("VENDIDO", 0)
+        - contagem_status.get("DISTRATADO", 0)
+        - contagem_status.get("Sem Status", 0)
+    )
     contagem_status_ordenada = dict(sorted(contagem_status.items(), key=lambda item: item[1], reverse=True))
     contagem_modelo_ordenada = dict(sorted(contagem_modelo.items(), key=lambda item: item[1], reverse=True))
 
